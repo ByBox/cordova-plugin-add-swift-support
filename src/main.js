@@ -25,6 +25,7 @@ export default (context) => {
   const glob = context.requireCordovaModule('glob');
 
   if (context.hook === 'after_platform_add' || context.hook === 'after_prepare' || context.hook === 'after_plugin_add') {
+    getPlatformVersionsFromFileSystem(context, projectRoot).then((platformVersions) => {
       const IOS_MIN_DEPLOYMENT_TARGET = '7.0';
       const platformPath = path.join(projectRoot, 'platforms', 'ios');
       const config = getConfigParser(context, path.join(projectRoot, 'config.xml'));
@@ -34,6 +35,7 @@ export default (context) => {
       let projectName;
       let projectPath;
       let pluginsPath;
+      let iosPlatformVersion;
       let pbxprojPath;
       let xcodeProject;
 
@@ -41,6 +43,16 @@ export default (context) => {
       let buildConfigs;
       let buildConfig;
       let configName;
+
+      platformVersions.forEach((platformVersion) => {
+        if (platformVersion.platform === 'ios') {
+          iosPlatformVersion = platformVersion.version;
+        }
+      });
+
+      if (!iosPlatformVersion) {
+        return;
+      }
 
       projectName = config.name();
       projectPath = path.join(platformPath, projectName);
@@ -50,7 +62,7 @@ export default (context) => {
 
       xcodeProject.parseSync();
 
-      bridgingHeaderPath = path.posix.join(projectPath, 'Bridging-Header.h');
+      bridgingHeaderPath = getBridgingHeaderPath(context, projectPath, iosPlatformVersion);
 
       try {
         fs.statSync(bridgingHeaderPath);
@@ -146,6 +158,7 @@ export default (context) => {
 
         fs.writeFileSync(pbxprojPath, xcodeProject.writeSync());
       });
+    });
   }
 };
 
@@ -162,3 +175,30 @@ const getConfigParser = (context, configPath) => {
   return new ConfigParser(configPath);
 };
 
+const getBridgingHeaderPath = (context, projectPath, iosPlatformVersion) => {
+  const semver = context.requireCordovaModule('semver');
+  let bridgingHeaderPath;
+  if (semver.lt(iosPlatformVersion, '4.0.0')) {
+    bridgingHeaderPath = path.posix.join(projectPath, 'Plugins', 'Bridging-Header.h');
+  } else {
+    bridgingHeaderPath = path.posix.join(projectPath, 'Bridging-Header.h');
+  }
+
+  return bridgingHeaderPath;
+};
+
+const getPlatformVersionsFromFileSystem = (context, projectRoot) => {
+  const cordovaUtil = context.requireCordovaModule('cordova-lib/src/cordova/util');
+  const Q = context.requireCordovaModule('q');
+  const platformsOnFs = cordovaUtil.listPlatforms(projectRoot);
+  const platformVersions = platformsOnFs.map((platform) => {
+    const script = path.join(projectRoot, 'platforms', platform, 'cordova', 'version');
+    return Q.ninvoke(childProcess, 'exec', script, {}).then((result) => {
+      const version = result[0];
+      const versionCleaned = version.replace(/\r?\n|\r/g, '');
+      return {platform: platform, version: versionCleaned};
+    });
+  });
+
+  return Q.all(platformVersions);
+};
